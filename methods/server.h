@@ -51,6 +51,7 @@ struct ServerState
    enum {Header, Data} State;
    bool Persistent;
    bool PipelineAllowed;
+   bool RangesAllowed;
    std::string Location;
 
    // This is a Persistent attribute of the server itself.
@@ -84,13 +85,12 @@ struct ServerState
    bool AddPartialFileToHashes(FileFd &File);
 
    bool Comp(URI Other) const {return Other.Host == ServerName.Host && Other.Port == ServerName.Port;};
-   virtual void Reset() {Major = 0; Minor = 0; Result = 0; Code[0] = '\0'; TotalFileSize = 0; JunkSize = 0;
-		 StartPos = 0; Encoding = Closes; time(&Date); HaveContent = false;
-		 State = Header; Persistent = false; Pipeline = false; MaximumSize = 0; PipelineAllowed = true;};
+   virtual void Reset(bool const Everything = true);
    virtual bool WriteResponse(std::string const &Data) = 0;
 
    /** \brief Transfer the data from the socket */
    virtual bool RunData(FileFd * const File) = 0;
+   virtual bool RunDataToDevNull() = 0;
 
    virtual bool Open() = 0;
    virtual bool IsOpen() = 0;
@@ -140,7 +140,7 @@ class ServerMethod : public aptMethod
       TRY_AGAIN_OR_REDIRECT
    };
    /** \brief Handle the retrieved header data */
-   DealWithHeadersResult DealWithHeaders(FetchResult &Res);
+   virtual DealWithHeadersResult DealWithHeaders(FetchResult &Res);
 
    // In the event of a fatal signal this file will be closed and timestamped.
    static std::string FailFile;
@@ -155,8 +155,11 @@ class ServerMethod : public aptMethod
    virtual void SendReq(FetchItem *Itm) = 0;
    virtual std::unique_ptr<ServerState> CreateServerState(URI const &uri) = 0;
    virtual void RotateDNS() = 0;
+   virtual bool Configuration(std::string Message) APT_OVERRIDE;
 
-   ServerMethod(char const * const Binary, char const * const Ver,unsigned long const Flags);
+   bool AddProxyAuth(URI &Proxy, URI const &Server) const;
+
+   ServerMethod(std::string &&Binary, char const * const Ver,unsigned long const Flags);
    virtual ~ServerMethod() {};
 };
 

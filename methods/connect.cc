@@ -61,10 +61,25 @@ void RotateDNS()
       LastUsed = LastHostAddr;
 }
 									/*}}}*/
+static bool ConnectionAllowed(char const * const Service, std::string const &Host)/*{{{*/
+{
+   if (unlikely(Host.empty())) // the only legal empty host (RFC2782 '.' target) is detected by caller
+      return false;
+   if (APT::String::Endswith(Host, ".onion") && _config->FindB("Acquire::BlockDotOnion", true))
+   {
+      // TRANSLATOR: %s is e.g. Tor's ".onion" which would likely fail or leak info (RFC7686)
+      _error->Error(_("Direct connection to %s domains is blocked by default."), ".onion");
+      if (strcmp(Service, "http") == 0)
+	_error->Error(_("If you meant to use Tor remember to use %s instead of %s."), "tor+http", "http");
+      return false;
+   }
+   return true;
+}
+									/*}}}*/
 // DoConnect - Attempt a connect operation				/*{{{*/
 // ---------------------------------------------------------------------
 /* This helper function attempts a connection to a single address. */
-static bool DoConnect(struct addrinfo *Addr,std::string Host,
+static bool DoConnect(struct addrinfo *Addr,std::string const &Host,
 		      unsigned long TimeOut,int &Fd,pkgAcqMethod *Owner)
 {
    // Show a status indicator
@@ -138,6 +153,8 @@ static bool ConnectToHostname(std::string const &Host, int const Port,
       const char * const Service, int DefPort, int &Fd,
       unsigned long const TimeOut, pkgAcqMethod * const Owner)
 {
+   if (ConnectionAllowed(Service, Host) == false)
+      return false;
    // Convert the port name/number
    char ServStr[300];
    if (Port != 0)
@@ -165,8 +182,10 @@ static bool ConnectToHostname(std::string const &Host, int const Port,
       memset(&Hints,0,sizeof(Hints));
       Hints.ai_socktype = SOCK_STREAM;
       Hints.ai_flags = 0;
+#ifdef AI_IDN
       if (_config->FindB("Acquire::Connect::IDN", true) == true)
 	 Hints.ai_flags |= AI_IDN;
+#endif
       // see getaddrinfo(3): only return address if system has such a address configured
       // useful if system is ipv4 only, to not get ipv6, but that fails if the system has
       // no address configured: e.g. offline and trying to connect to localhost.
@@ -274,11 +293,20 @@ bool Connect(std::string Host,int Port,const char *Service,
    if (_error->PendingError() == true)
       return false;
 
+   if (ConnectionAllowed(Service, Host) == false)
+      return false;
+
    if(LastHost != Host || LastPort != Port)
    {
       SrvRecords.clear();
       if (_config->FindB("Acquire::EnableSrvRecords", true) == true)
+      {
          GetSrvRecords(Host, DefPort, SrvRecords);
+	 // RFC2782 defines that a lonely '.' target is an abort reason
+	 if (SrvRecords.size() == 1 && SrvRecords[0].target.empty())
+	    return _error->Error("SRV records for %s indicate that "
+		  "%s service is not available at this domain", Host.c_str(), Service);
+      }
    }
 
    size_t stackSize = 0;

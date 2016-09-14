@@ -46,6 +46,7 @@
 #include <ctime>
 #include <sstream>
 #include <numeric>
+#include <random>
 
 #include <apti18n.h>
 									/*}}}*/
@@ -145,7 +146,7 @@ static void ReportMirrorFailureToCentral(pkgAcquire::Item const &I, std::string 
 	     << FailCode << std::endl;
 #endif
    string const report = _config->Find("Methods::Mirror::ProblemReporting",
-				 "/usr/lib/apt/apt-report-mirror-failure");
+				 LIBEXEC_DIR "/apt-report-mirror-failure");
    if(!FileExists(report))
       return;
 
@@ -410,7 +411,7 @@ bool pkgAcqTransactionItem::QueueURI(pkgAcquire::ItemDesc &Item)
       return false;
    }
    // If we got the InRelease file via a mirror, pick all indexes directly from this mirror, too
-   if (TransactionManager->BaseURI.empty() == false &&
+   if (TransactionManager->BaseURI.empty() == false && UsedMirror.empty() &&
 	 URI::SiteOnly(Item.URI) != URI::SiteOnly(TransactionManager->BaseURI))
    {
       // this ensures we rewrite only once and only the first step
@@ -451,7 +452,11 @@ std::string pkgAcquire::Item::GetFinalFilename() const
 }
 std::string pkgAcqDiffIndex::GetFinalFilename() const
 {
-   return GetFinalFileNameFromURI(GetDiffIndexURI(Target));
+   std::string const FinalFile = GetFinalFileNameFromURI(GetDiffIndexURI(Target));
+   // we don't want recompress, so lets keep whatever we got
+   if (CurrentCompressionExtension == "uncompressed")
+      return FinalFile;
+   return FinalFile + "." + CurrentCompressionExtension;
 }
 std::string pkgAcqIndex::GetFinalFilename() const
 {
@@ -488,7 +493,10 @@ std::string pkgAcqIndex::GetMetaKey() const
 }
 std::string pkgAcqDiffIndex::GetMetaKey() const
 {
-   return GetDiffIndexFileName(Target.MetaKey);
+   auto const metakey = GetDiffIndexFileName(Target.MetaKey);
+   if (CurrentCompressionExtension == "uncompressed")
+      return metakey;
+   return metakey + "." + CurrentCompressionExtension;
 }
 									/*}}}*/
 //pkgAcqTransactionItem::TransactionState and specialisations for child classes	/*{{{*/
@@ -685,10 +693,15 @@ class APT_HIDDEN CleanupItem : public pkgAcqTransactionItem		/*{{{*/
 									/*}}}*/
 
 // Acquire::Item::Item - Constructor					/*{{{*/
+class pkgAcquire::Item::Private
+{
+public:
+   std::vector<std::string> PastRedirections;
+};
 APT_IGNORE_DEPRECATED_PUSH
 pkgAcquire::Item::Item(pkgAcquire * const owner) :
    FileSize(0), PartialSize(0), Mode(0), ID(0), Complete(false), Local(false),
-    QueueCounter(0), ExpectedAdditionalItems(0), Owner(owner), d(NULL)
+    QueueCounter(0), ExpectedAdditionalItems(0), Owner(owner), d(new Private())
 {
    Owner->Add(this);
    Status = StatIdle;
@@ -699,6 +712,7 @@ APT_IGNORE_DEPRECATED_POP
 pkgAcquire::Item::~Item()
 {
    Owner->Remove(this);
+   delete d;
 }
 									/*}}}*/
 std::string pkgAcquire::Item::Custom600Headers() const			/*{{{*/
@@ -766,32 +780,40 @@ void pkgAcquire::Item::Failed(string const &Message,pkgAcquire::MethodConfig con
    }
 
    string const FailReason = LookupTag(Message, "FailReason");
-   enum { MAXIMUM_SIZE_EXCEEDED, HASHSUM_MISMATCH, WEAK_HASHSUMS, OTHER } failreason = OTHER;
+   enum { MAXIMUM_SIZE_EXCEEDED, HASHSUM_MISMATCH, WEAK_HASHSUMS, REDIRECTION_LOOP, OTHER } failreason = OTHER;
    if ( FailReason == "MaximumSizeExceeded")
       failreason = MAXIMUM_SIZE_EXCEEDED;
    else if ( FailReason == "WeakHashSums")
       failreason = WEAK_HASHSUMS;
+   else if (FailReason == "RedirectionLoop")
+      failreason = REDIRECTION_LOOP;
    else if (Status == StatAuthError)
       failreason = HASHSUM_MISMATCH;
 
    if(ErrorText.empty())
    {
+      std::ostringstream out;
+      switch (failreason)
+      {
+	 case HASHSUM_MISMATCH:
+	    out << _("Hash Sum mismatch") << std::endl;
+	    break;
+	 case WEAK_HASHSUMS:
+	    out << _("Insufficient information available to perform this download securely") << std::endl;
+	    break;
+	 case REDIRECTION_LOOP:
+	    out << "Redirection loop encountered" << std::endl;
+	    break;
+	 case MAXIMUM_SIZE_EXCEEDED:
+	    out << LookupTag(Message, "Message") << std::endl;
+	    break;
+	 case OTHER:
+	    out << LookupTag(Message, "Message");
+	    break;
+      }
+
       if (Status == StatAuthError)
       {
-	 std::ostringstream out;
-	 switch (failreason)
-	 {
-	    case HASHSUM_MISMATCH:
-	       out << _("Hash Sum mismatch") << std::endl;
-	       break;
-	    case WEAK_HASHSUMS:
-	       out << _("Insufficient information available to perform this download securely") << std::endl;
-	       break;
-	    case MAXIMUM_SIZE_EXCEEDED:
-	    case OTHER:
-	       out << LookupTag(Message, "Message") << std::endl;
-	       break;
-	 }
 	 auto const ExpectedHashes = GetExpectedHashes();
 	 if (ExpectedHashes.empty() == false)
 	 {
@@ -822,10 +844,8 @@ void pkgAcquire::Item::Failed(string const &Message,pkgAcquire::MethodConfig con
 	    }
 	    out << "Last modification reported: " << LookupTag(Message, "Last-Modified", "<none>") << std::endl;
 	 }
-	 ErrorText = out.str();
       }
-      else
-	 ErrorText = LookupTag(Message,"Message");
+      ErrorText = out.str();
    }
 
    switch (failreason)
@@ -833,6 +853,7 @@ void pkgAcquire::Item::Failed(string const &Message,pkgAcquire::MethodConfig con
       case MAXIMUM_SIZE_EXCEEDED: RenameOnError(MaximumSizeExceeded); break;
       case HASHSUM_MISMATCH: RenameOnError(HashSumMismatch); break;
       case WEAK_HASHSUMS: break;
+      case REDIRECTION_LOOP: break;
       case OTHER: break;
    }
 
@@ -974,6 +995,49 @@ std::string pkgAcquire::Item::HashSum() const				/*{{{*/
    HashStringList const hashes = GetExpectedHashes();
    HashString const * const hs = hashes.find(NULL);
    return hs != NULL ? hs->toStr() : "";
+}
+									/*}}}*/
+bool pkgAcquire::Item::IsRedirectionLoop(std::string const &NewURI)	/*{{{*/
+{
+   // store can fail due to permission errors and the item will "loop" then
+   if (APT::String::Startswith(NewURI, "store:"))
+      return false;
+   if (d->PastRedirections.empty())
+   {
+      d->PastRedirections.push_back(NewURI);
+      return false;
+   }
+   auto const LastURI = std::prev(d->PastRedirections.end());
+   // redirections to the same file are a way of restarting/resheduling,
+   // individual methods will have to make sure that they aren't looping this way
+   if (*LastURI == NewURI)
+      return false;
+   if (std::find(d->PastRedirections.begin(), LastURI, NewURI) != LastURI)
+      return true;
+   d->PastRedirections.push_back(NewURI);
+   return false;
+}
+									/*}}}*/
+
+																		/*}}}*/
+int pkgAcquire::Item::Priority() 				/*{{{*/
+{
+   // Stage 1: Meta indices and diff indices
+   // - those need to be fetched first to have progress reporting working
+   //   for the rest
+   if (dynamic_cast<pkgAcqMetaSig*>(this) != nullptr
+       || dynamic_cast<pkgAcqMetaBase*>(this) != nullptr
+       || dynamic_cast<pkgAcqDiffIndex*>(this) != nullptr)
+      return 1000;
+   // Stage 2: Diff files
+   // - fetch before complete indexes so we can apply the diffs while fetching
+   //   larger files.
+   if (dynamic_cast<pkgAcqIndexDiffs*>(this) != nullptr ||
+       dynamic_cast<pkgAcqIndexMergeDiffs*>(this) != nullptr)
+      return 800;
+
+   // Stage 3: The rest - complete index files and other stuff
+   return 500;
 }
 									/*}}}*/
 
@@ -1192,9 +1256,15 @@ bool pkgAcqMetaBase::CheckDownloadDone(pkgAcqTransactionItem * const I, const st
    if (I->UsedMirror.empty() == false && _config->FindB("Acquire::SameMirrorForAllIndexes", true))
    {
       if (APT::String::Endswith(I->Desc.URI, "InRelease"))
+      {
 	 TransactionManager->BaseURI = I->Desc.URI.substr(0, I->Desc.URI.length() - strlen("InRelease"));
+	 TransactionManager->UsedMirror = I->UsedMirror;
+      }
       else if (APT::String::Endswith(I->Desc.URI, "Release"))
+      {
 	 TransactionManager->BaseURI = I->Desc.URI.substr(0, I->Desc.URI.length() - strlen("Release"));
+	 TransactionManager->UsedMirror = I->UsedMirror;
+      }
    }
 
    std::string const FileName = LookupTag(Message,"Filename");
@@ -1293,6 +1363,23 @@ void pkgAcqMetaClearSig::QueueIndexes(bool const verify)			/*{{{*/
    if (hasReleaseFile && verify == false)
       hasHashes = std::any_of(IndexTargets.begin(), IndexTargets.end(),
 	    [&](IndexTarget const &Target) { return TransactionManager->MetaIndexParser->Exists(Target.MetaKey); });
+   if (_config->FindB("Acquire::IndexTargets::Randomized", true) && likely(IndexTargets.empty() == false))
+   {
+      /* For fallback handling and to have some reasonable progress information
+	 we can't randomize everything, but at least the order in the same type
+	 can be as we shouldn't be telling the mirrors (and everyone else watching)
+	 which is native/foreign arch, specific order of preference of translations, … */
+      auto range_start = IndexTargets.begin();
+      std::random_device rd;
+      std::default_random_engine g(rd());
+      do {
+	 auto const type = range_start->Option(IndexTarget::CREATED_BY);
+	 auto const range_end = std::find_if_not(range_start, IndexTargets.end(),
+	       [&type](IndexTarget const &T) { return type == T.Option(IndexTarget::CREATED_BY); });
+	 std::shuffle(range_start, range_end, g);
+	 range_start = range_end;
+      } while (range_start != IndexTargets.end());
+   }
    for (auto&& Target: IndexTargets)
    {
       // if we have seen a target which is created-by a target this one here is declared a
@@ -1931,44 +2018,33 @@ pkgAcqBaseIndex::~pkgAcqBaseIndex() {}
 pkgAcqDiffIndex::pkgAcqDiffIndex(pkgAcquire * const Owner,
                                  pkgAcqMetaClearSig * const TransactionManager,
                                  IndexTarget const &Target)
-   : pkgAcqBaseIndex(Owner, TransactionManager, Target), d(NULL), diffs(NULL)
+   : pkgAcqIndex(Owner, TransactionManager, Target, true), d(NULL), diffs(NULL)
 {
    // FIXME: Magic number as an upper bound on pdiffs we will reasonably acquire
    ExpectedAdditionalItems = 40;
-
    Debug = _config->FindB("Debug::pkgAcquire::Diffs",false);
 
-   Desc.Owner = this;
-   Desc.Description = GetDiffIndexFileName(Target.Description);
-   Desc.ShortDesc = Target.ShortDesc;
-   Desc.URI = GetDiffIndexURI(Target);
-
-   DestFile = GetPartialFileNameFromURI(Desc.URI);
+   CompressionExtensions.clear();
+   {
+      std::vector<std::string> types = APT::Configuration::getCompressionTypes();
+      if (types.empty() == false)
+      {
+	 std::ostringstream os;
+	 std::copy_if(types.begin(), types.end()-1, std::ostream_iterator<std::string>(os, " "), [&](std::string const type) {
+	       if (type == "uncompressed")
+	          return true;
+	       return TransactionManager->MetaIndexParser->Exists(GetDiffIndexFileName(Target.MetaKey) + '.' + type);
+	 });
+	 os << *types.rbegin();
+	 CompressionExtensions = os.str();
+      }
+   }
+   if (Target.Option(IndexTarget::COMPRESSIONTYPES).find("by-hash") != std::string::npos)
+      CompressionExtensions = "by-hash " + CompressionExtensions;
+   Init(GetDiffIndexURI(Target), GetDiffIndexFileName(Target.Description), Target.ShortDesc);
 
    if(Debug)
       std::clog << "pkgAcqDiffIndex: " << Desc.URI << std::endl;
-
-   QueueURI(Desc);
-}
-									/*}}}*/
-// AcqIndex::Custom600Headers - Insert custom request headers		/*{{{*/
-// ---------------------------------------------------------------------
-/* The only header we use is the last-modified header. */
-string pkgAcqDiffIndex::Custom600Headers() const
-{
-   if (TransactionManager->LastMetaIndexParser != NULL)
-      return "\nIndex-File: true";
-
-   string const Final = GetFinalFilename();
-
-   if(Debug)
-      std::clog << "Custom600Header-IMS: " << Final << std::endl;
-
-   struct stat Buf;
-   if (stat(Final.c_str(),&Buf) != 0)
-      return "\nIndex-File: true";
-   
-   return "\nIndex-File: true\nLast-Modified: " + TimeRFC1123(Buf.st_mtime, false);
 }
 									/*}}}*/
 void pkgAcqDiffIndex::QueueOnIMSHit() const				/*{{{*/
@@ -1999,7 +2075,7 @@ bool pkgAcqDiffIndex::ParseDiffIndex(string const &IndexDiffFile)	/*{{{*/
       std::clog << "pkgAcqDiffIndex::ParseIndexDiff() " << IndexDiffFile
 	 << std::endl;
 
-   FileFd Fd(IndexDiffFile,FileFd::ReadOnly);
+   FileFd Fd(IndexDiffFile, FileFd::ReadOnly, FileFd::Extension);
    pkgTagFile TF(&Fd);
    if (Fd.IsOpen() == false || Fd.Failed())
       return false;
@@ -2011,7 +2087,7 @@ bool pkgAcqDiffIndex::ParseDiffIndex(string const &IndexDiffFile)	/*{{{*/
    HashStringList ServerHashes;
    unsigned long long ServerSize = 0;
 
-   auto const &posix = std::locale("C.UTF-8");
+   auto const &posix = std::locale::classic();
    for (char const * const * type = HashString::SupportedHashes(); *type != NULL; ++type)
    {
       std::string tagname = *type;
@@ -2371,7 +2447,9 @@ bool pkgAcqDiffIndex::ParseDiffIndex(string const &IndexDiffFile)	/*{{{*/
 									/*}}}*/
 void pkgAcqDiffIndex::Failed(string const &Message,pkgAcquire::MethodConfig const * const Cnf)/*{{{*/
 {
-   pkgAcqBaseIndex::Failed(Message,Cnf);
+   if (CommonFailed(GetDiffIndexURI(Target), GetDiffIndexFileName(Target.Description), Message, Cnf))
+      return;
+
    Status = StatDone;
    ExpectedAdditionalItems = 0;
 
@@ -2789,10 +2867,12 @@ pkgAcqIndexMergeDiffs::~pkgAcqIndexMergeDiffs() {}
 // AcqIndex::AcqIndex - Constructor					/*{{{*/
 pkgAcqIndex::pkgAcqIndex(pkgAcquire * const Owner,
                          pkgAcqMetaClearSig * const TransactionManager,
-                         IndexTarget const &Target)
+                         IndexTarget const &Target, bool const Derived)
    : pkgAcqBaseIndex(Owner, TransactionManager, Target), d(NULL), Stage(STAGE_DOWNLOAD),
    CompressionExtensions(Target.Option(IndexTarget::COMPRESSIONTYPES))
 {
+   if (Derived)
+      return;
    Init(Target.URI, Target.Description, Target.ShortDesc);
 
    if(_config->FindB("Debug::Acquire::Transaction", false) == true)
@@ -2825,10 +2905,6 @@ void pkgAcqIndex::Init(string const &URI, string const &URIDesc,
    DestFile = GetPartialFileNameFromURI(URI);
    NextCompressionExtension(CurrentCompressionExtension, CompressionExtensions, false);
 
-   // store file size of the download to ensure the fetcher gives
-   // accurate progress reporting
-   FileSize = GetExpectedHashes().FileSize();
-
    if (CurrentCompressionExtension == "uncompressed")
    {
       Desc.URI = URI;
@@ -2843,6 +2919,8 @@ void pkgAcqIndex::Init(string const &URI, string const &URIDesc,
 	 Desc.URI = URI + '.' + CurrentCompressionExtension;
 	 DestFile = DestFile + '.' + CurrentCompressionExtension;
       }
+      else
+	 Desc.URI = URI;
 
       HashStringList const Hashes = GetExpectedHashes();
       HashString const * const TargetHash = Hashes.find(NULL);
@@ -2865,6 +2943,9 @@ void pkgAcqIndex::Init(string const &URI, string const &URIDesc,
       DestFile = DestFile + '.' + CurrentCompressionExtension;
    }
 
+   // store file size of the download to ensure the fetcher gives
+   // accurate progress reporting
+   FileSize = GetExpectedHashes().FileSize();
 
    Desc.Description = URIDesc;
    Desc.Owner = this;
@@ -2897,20 +2978,40 @@ string pkgAcqIndex::Custom600Headers() const
 }
 									/*}}}*/
 // AcqIndex::Failed - getting the indexfile failed			/*{{{*/
-void pkgAcqIndex::Failed(string const &Message,pkgAcquire::MethodConfig const * const Cnf)
+bool pkgAcqIndex::CommonFailed(std::string const &TargetURI, std::string const TargetDesc,
+      std::string const &Message, pkgAcquire::MethodConfig const * const Cnf)
 {
    pkgAcqBaseIndex::Failed(Message,Cnf);
+
+   if (UsedMirror.empty() == false && UsedMirror != "DIRECT" &&
+	 LookupTag(Message, "FailReason") == "HttpError404")
+   {
+      UsedMirror = "DIRECT";
+      if (Desc.URI.find("/by-hash/") != std::string::npos)
+	 CompressionExtensions = "by-hash " + CompressionExtensions;
+      else
+	 CompressionExtensions = CurrentCompressionExtension + ' ' + CompressionExtensions;
+      Init(TargetURI, TargetDesc, Desc.ShortDesc);
+      Status = StatIdle;
+      return true;
+   }
 
    // authorisation matches will not be fixed by other compression types
    if (Status != StatAuthError)
    {
       if (CompressionExtensions.empty() == false)
       {
-	 Init(Target.URI, Desc.Description, Desc.ShortDesc);
+	 Init(TargetURI, Desc.Description, Desc.ShortDesc);
 	 Status = StatIdle;
-	 return;
+	 return true;
       }
    }
+   return false;
+}
+void pkgAcqIndex::Failed(string const &Message,pkgAcquire::MethodConfig const * const Cnf)
+{
+   if (CommonFailed(Target.URI, Target.Description, Message, Cnf))
+      return;
 
    if(Target.IsOptional && GetExpectedHashes().empty() && Stage == STAGE_DOWNLOAD)
       Status = StatDone;
@@ -3218,9 +3319,8 @@ bool pkgAcqArchive::QueueNext()
 
       // Create the item
       Local = false;
-      QueueURI(Desc);
-
       ++Vf;
+      QueueURI(Desc);
       return true;
    }
    return false;
@@ -3379,7 +3479,7 @@ void pkgAcqChangelog::Init(std::string const &DestDir, std::string const &DestFi
    TemporaryDirectory = tmpname;
 
    ChangeOwnerAndPermissionOfFile("Item::QueueURI", TemporaryDirectory.c_str(),
-	 SandboxUser.c_str(), "root", 0700);
+	 SandboxUser.c_str(), ROOT_GROUP, 0700);
 
    DestFile = flCombine(TemporaryDirectory, DestFileName);
    if (DestDir.empty() == false)
@@ -3427,7 +3527,8 @@ std::string pkgAcqChangelog::URI(pkgCache::VerIterator const &Ver)	/*{{{*/
       pkgCache::PkgIterator const Pkg = Ver.ParentPkg();
       if (Pkg->CurrentVer != 0 && Pkg.CurrentVer() == Ver)
       {
-	 std::string const basename = std::string("/usr/share/doc/") + Pkg.Name() + "/changelog";
+	 std::string const root = _config->FindDir("Dir");
+	 std::string const basename = root + std::string("usr/share/doc/") + Pkg.Name() + "/changelog";
 	 std::string const debianname = basename + ".Debian";
 	 if (FileExists(debianname))
 	    return "copy://" + debianname;

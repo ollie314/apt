@@ -86,6 +86,7 @@ class FileFd
       return Read(To,Size);
    }   
    bool Read(void *To,unsigned long long Size,unsigned long long *Actual = 0);
+   bool static Read(int const Fd, void *To, unsigned long long Size, unsigned long long * const Actual = 0);
    char* ReadLine(char *To, unsigned long long const Size);
    bool Flush();
    bool Write(const void *From,unsigned long long Size);
@@ -163,7 +164,7 @@ bool RemoveFile(char const * const Function, std::string const &FileName);
 int GetLock(std::string File,bool Errors = true);
 bool FileExists(std::string File);
 bool RealFileExists(std::string File);
-bool DirectoryExists(std::string const &Path) APT_CONST;
+bool DirectoryExists(std::string const &Path);
 bool CreateDirectory(std::string const &Parent, std::string const &Path);
 time_t GetModificationTime(std::string const &Path);
 bool Rename(std::string From, std::string To);

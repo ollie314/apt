@@ -1908,11 +1908,12 @@ public:
 	       " but was forced to ignore it in favor of an external binary – which isn't installed.", compressor.Name.c_str());
 
       bool const Comp = (Mode & FileFd::WriteOnly) == FileFd::WriteOnly;
-      if (Comp == false)
+      if (Comp == false && filefd->iFd != -1)
       {
 	 // Handle 'decompression' of empty files
 	 struct stat Buf;
-	 fstat(filefd->iFd, &Buf);
+	 if (fstat(filefd->iFd, &Buf) != 0)
+	    return filefd->FileFdErrno("fstat", "Could not stat fd %d for file %s", filefd->iFd, filefd->FileName.c_str());
 	 if (Buf.st_size == 0 && S_ISFIFO(Buf.st_mode) == false)
 	    return true;
 
@@ -2443,6 +2444,37 @@ bool FileFd::Read(void *To,unsigned long long Size,unsigned long long *Actual)
    }
 
    return FileFdError(_("read, still have %llu to read but none left"), Size);
+}
+bool FileFd::Read(int const Fd, void *To, unsigned long long Size, unsigned long long * const Actual)
+{
+   ssize_t Res = 1;
+   errno = 0;
+   if (Actual != nullptr)
+      *Actual = 0;
+   *static_cast<char *>(To) = '\0';
+   while (Res > 0 && Size > 0)
+   {
+      Res = read(Fd, To, Size);
+      if (Res < 0)
+      {
+	 if (errno == EINTR)
+	 {
+	    Res = 1;
+	    errno = 0;
+	    continue;
+	 }
+	 return _error->Errno("read", _("Read error"));
+      }
+      To = static_cast<char *>(To) + Res;
+      Size -= Res;
+      if (Actual != 0)
+	 *Actual += Res;
+   }
+   if (Size == 0)
+      return true;
+   if (Actual != nullptr)
+      return true;
+   return _error->Error(_("read, still have %llu to read but none left"), Size);
 }
 									/*}}}*/
 // FileFd::ReadLine - Read a complete line from the file		/*{{{*/

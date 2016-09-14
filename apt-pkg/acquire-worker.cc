@@ -93,17 +93,38 @@ pkgAcquire::Worker::~Worker()
 bool pkgAcquire::Worker::Start()
 {
    // Get the method path
-   string Method = _config->FindDir("Dir::Bin::Methods") + Access;
+   constexpr char const * const methodsDir = "Dir::Bin::Methods";
+   std::string const confItem = std::string(methodsDir) + "::" + Access;
+   std::string Method;
+   if (_config->Exists(confItem))
+	 Method = _config->FindFile(confItem.c_str());
+   else
+	 Method = _config->FindDir(methodsDir) + Access;
    if (FileExists(Method) == false)
    {
+      if (flNotDir(Method) == "false")
+      {
+	 _error->Error(_("The method '%s' is explicitly disabled via configuration."), Access.c_str());
+	 if (Access == "http" || Access == "https")
+	    _error->Notice(_("If you meant to use Tor remember to use %s instead of %s."), ("tor+" + Access).c_str(), Access.c_str());
+	 return false;
+      }
       _error->Error(_("The method driver %s could not be found."),Method.c_str());
-      if (Access == "https")
-	 _error->Notice(_("Is the package %s installed?"), "apt-transport-https");
+      std::string const A(Access.cbegin(), std::find(Access.cbegin(), Access.cend(), '+'));
+      std::string pkg;
+      strprintf(pkg, "apt-transport-%s", A.c_str());
+      _error->Notice(_("Is the package %s installed?"), pkg.c_str());
       return false;
    }
+   std::string const Calling = _config->FindDir(methodsDir) + Access;
 
    if (Debug == true)
-      clog << "Starting method '" << Method << '\'' << endl;
+   {
+      std::clog << "Starting method '" << Calling << "'";
+      if (Calling != Method)
+	 std::clog << " ( via " << Method << " )";
+      std::clog << endl;
+   }
 
    // Create the pipes
    int Pipes[4] = {-1,-1,-1,-1};
@@ -128,11 +149,9 @@ bool pkgAcquire::Worker::Start()
       SetCloseExec(STDIN_FILENO,false);
       SetCloseExec(STDERR_FILENO,false);
 
-      const char *Args[2];
-      Args[0] = Method.c_str();
-      Args[1] = 0;
-      execv(Args[0],(char **)Args);
-      cerr << "Failed to exec method " << Args[0] << endl;
+      const char * const Args[] = { Calling.c_str(), nullptr };
+      execv(Method.c_str() ,const_cast<char **>(Args));
+      std::cerr << "Failed to exec method " << Calling << " ( via " << Method << ")" << endl;
       _exit(100);
    }
 
@@ -267,6 +286,16 @@ bool pkgAcquire::Worker::RunMessages()
 	    for (auto const &Owner: ItmOwners)
 	    {
 	       pkgAcquire::ItemDesc &desc = Owner->GetItemDesc();
+	       if (Owner->IsRedirectionLoop(NewURI))
+	       {
+		  std::string msg = Message;
+		  msg.append("\nFailReason: RedirectionLoop");
+		  Owner->Failed(msg, Config);
+		  if (Log != nullptr)
+		     Log->Fail(Owner->GetItemDesc());
+		  continue;
+	       }
+
 	       if (Log != nullptr)
 		  Log->Done(desc);
 
@@ -435,6 +464,7 @@ bool pkgAcquire::Worker::RunMessages()
 	       }
 	       else
 	       {
+		  auto SavedDesc = Owner->GetItemDesc();
 		  if (isDoomedItem(Owner) == false)
 		  {
 		     if (Message.find("\nFailReason:") == std::string::npos)
@@ -447,7 +477,7 @@ bool pkgAcquire::Worker::RunMessages()
 		     Owner->Failed(Message,Config);
 		  }
 		  if (Log != nullptr)
-		     Log->Fail(Owner->GetItemDesc());
+		     Log->Fail(SavedDesc);
 	       }
 	    }
 	    ItemDone();
@@ -495,11 +525,11 @@ bool pkgAcquire::Worker::RunMessages()
 		  Owner->Status = pkgAcquire::Item::StatAuthError;
 	       else if (errTransient)
 		  Owner->Status = pkgAcquire::Item::StatTransientNetworkError;
-
+	       auto SavedDesc = Owner->GetItemDesc();
 	       if (isDoomedItem(Owner) == false)
 		  Owner->Failed(Message,Config);
 	       if (Log != nullptr)
-		  Log->Fail(Owner->GetItemDesc());
+		  Log->Fail(SavedDesc);
 	    }
 	    ItemDone();
 
@@ -631,36 +661,15 @@ bool pkgAcquire::Worker::QueueItem(pkgAcquire::Queue::QItem *Item)
    if (OutFd == -1)
       return false;
 
-   HashStringList const hsl = Item->GetExpectedHashes();
-
    if (isDoomedItem(Item->Owner))
       return true;
-
-   if (hsl.usable() == false && Item->Owner->HashesRequired() &&
-	 _config->Exists("Acquire::ForceHash") == false)
-   {
-      std::string const Message = "400 URI Failure"
-	 "\nURI: " + Item->URI +
-	 "\nFilename: " + Item->Owner->DestFile +
-	 "\nFailReason: WeakHashSums";
-
-      auto const ItmOwners = Item->Owners;
-      for (auto &O: ItmOwners)
-      {
-	 O->Status = pkgAcquire::Item::StatAuthError;
-	 O->Failed(Message, Config);
-	 if (Log != nullptr)
-	    Log->Fail(O->GetItemDesc());
-      }
-      // "queued" successfully, the item just instantly failed
-      return true;
-   }
 
    string Message = "600 URI Acquire\n";
    Message.reserve(300);
    Message += "URI: " + Item->URI;
    Message += "\nFilename: " + Item->Owner->DestFile;
 
+   HashStringList const hsl = Item->GetExpectedHashes();
    for (HashStringList::const_iterator hs = hsl.begin(); hs != hsl.end(); ++hs)
       Message += "\nExpected-" + hs->HashType() + ": " + hs->HashValue();
 
@@ -683,7 +692,7 @@ bool pkgAcquire::Worker::QueueItem(pkgAcquire::Queue::QItem *Item)
    {
       std::string const SandboxUser = _config->Find("APT::Sandbox::User");
       ChangeOwnerAndPermissionOfFile("Item::QueueURI", Item->Owner->DestFile.c_str(),
-                                     SandboxUser.c_str(), "root", 0600);
+                                     SandboxUser.c_str(), ROOT_GROUP, 0600);
    }
 
    if (Debug == true)
@@ -779,7 +788,7 @@ void pkgAcquire::Worker::PrepareFiles(char const * const caller, pkgAcquire::Que
 {
    if (RealFileExists(Itm->Owner->DestFile))
    {
-      ChangeOwnerAndPermissionOfFile(caller, Itm->Owner->DestFile.c_str(), "root", "root", 0644);
+      ChangeOwnerAndPermissionOfFile(caller, Itm->Owner->DestFile.c_str(), "root", ROOT_GROUP, 0644);
       std::string const filename = Itm->Owner->DestFile;
       for (pkgAcquire::Queue::QItem::owner_iterator O = Itm->Owners.begin(); O != Itm->Owners.end(); ++O)
       {

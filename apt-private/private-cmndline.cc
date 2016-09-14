@@ -96,6 +96,7 @@ static bool addArgumentsAPTCache(std::vector<CommandLine::Args> &Args, char cons
 
    addArg('p', "pkg-cache", "Dir::Cache::pkgcache", CommandLine::HasArg);
    addArg('s', "src-cache", "Dir::Cache::srcpkgcache", CommandLine::HasArg);
+   addArg(0, "with-source", "APT::Sources::With::", CommandLine::HasArg);
 
    return found_something;
 }
@@ -188,6 +189,7 @@ static bool addArgumentsAPTGet(std::vector<CommandLine::Args> &Args, char const 
       addArg('f', "fix-broken", "APT::Get::Fix-Broken", 0);
       addArg(0, "purge", "APT::Get::Purge", 0);
       addArg('V',"verbose-versions","APT::Get::Show-Versions",0);
+      addArg(0, "autoremove", "APT::Get::AutomaticRemove", 0);
       addArg(0, "auto-remove", "APT::Get::AutomaticRemove", 0);
       addArg(0, "reinstall", "APT::Get::ReInstall", 0);
       addArg(0, "solver", "APT::Solver", CommandLine::HasArg);
@@ -275,6 +277,7 @@ static bool addArgumentsAPTGet(std::vector<CommandLine::Args> &Args, char const 
    addArg(0,"install-recommends","APT::Install-Recommends",CommandLine::Boolean);
    addArg(0,"install-suggests","APT::Install-Suggests",CommandLine::Boolean);
    addArg(0,"fix-policy","APT::Get::Fix-Policy-Broken",0);
+   addArg(0, "with-source", "APT::Sources::With::", CommandLine::HasArg);
 
    return found_something;
 }
@@ -307,6 +310,7 @@ static bool addArgumentsAPTMark(std::vector<CommandLine::Args> &Args, char const
       addArg('s',"dry-run","APT::Mark::Simulate",0);
       addArg('s',"no-act","APT::Mark::Simulate",0);
    }
+   addArg(0, "with-source", "APT::Sources::With::", CommandLine::HasArg);
 
    return true;
 }
@@ -339,6 +343,8 @@ static bool addArgumentsAPT(std::vector<CommandLine::Args> &Args, char const * c
    }
    else
       return false;
+
+   addArg(0, "with-source", "APT::Sources::With::", CommandLine::HasArg);
 
    return true;
 }

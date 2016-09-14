@@ -21,6 +21,7 @@
 #include <apt-pkg/fileutl.h>
 #include <apt-pkg/error.h>
 
+#include <array>
 #include <algorithm>
 #include <iomanip>
 #include <locale>
@@ -758,7 +759,7 @@ string TimeRFC1123(time_t Date, bool const NumericTimezone)
    if (gmtime_r(&Date, &Conv) == NULL)
       return "";
 
-   auto const posix = std::locale("C.UTF-8");
+   auto const posix = std::locale::classic();
    std::ostringstream datestr;
    datestr.imbue(posix);
    APT::StringView const fmt("%a, %d %b %Y %H:%M:%S");
@@ -945,7 +946,7 @@ bool RFC1123StrToTime(const char* const str,time_t &time)
    signed int year = 0; // yes, Y23K problem – we gonna worry then…
    std::string weekday, month, datespec, timespec, zone;
    std::istringstream ss(str);
-   auto const &posix = std::locale("C.UTF-8");
+   auto const &posix = std::locale::classic();
    ss.imbue(posix);
    ss >> weekday;
    // we only superficially check weekday, mostly to avoid accepting localized
@@ -1170,10 +1171,11 @@ bool Base256ToNum(const char *Str,unsigned long long &Res,unsigned int Len)
    tar files */
 bool Base256ToNum(const char *Str,unsigned long &Res,unsigned int Len)
 {
-   unsigned long long Num;
+   unsigned long long Num = 0;
    bool rc;
 
    rc = Base256ToNum(Str, Num, Len);
+   // rudimentary check for overflow (Res = ulong, Num = ulonglong)
    Res = Num;
    if (Res != Num)
       return false;
@@ -1639,13 +1641,15 @@ void URI::CopyFrom(const string &U)
    I = FirstColon + 1;
    if (I > SingleSlash)
       I = SingleSlash;
-   for (; I < SingleSlash && *I != ':'; ++I);
-   string::const_iterator SecondColon = I;
-   
-   // Search for the @ after the colon
-   for (; I < SingleSlash && *I != '@'; ++I);
-   string::const_iterator At = I;
-   
+
+   // Search for the @ separating user:pass from host
+   auto const RevAt = std::find(
+	 std::string::const_reverse_iterator(SingleSlash),
+	 std::string::const_reverse_iterator(I), '@');
+   string::const_iterator const At = RevAt.base() == I ? SingleSlash : std::prev(RevAt.base());
+   // and then look for the colon between user and pass
+   string::const_iterator const SecondColon = std::find(I, At, ':');
+
    // Now write the host and user/pass
    if (At == SingleSlash)
    {

@@ -1,3 +1,171 @@
+apt (1.3~rc4) unstable; urgency=medium
+
+  [ Julian Andres Klode ]
+  * Fix segfault and out-of-bounds read in Binary fields
+  * TagFile: Fix off-by-one errors in comment stripping
+  * Base256ToNum: Fix uninitialized value
+  * test-apt-cdrom: Fix for gnupg 2.1.15
+  * CMake: test/libapt: Use a prebuilt GTest library if available
+  * CMake: apt-pkg: Use correct ICONV_INCLUDE_DIRS variable
+  * acquire: Use priority queues and a 3 stage pipeline design
+    => faster updates with better progress reporting
+  * debian: Move bugscript to old location for overlayfs xdev issue
+  * debian: Pass -O to make to get readable build logs
+
+  [ David Kalnischkies ]
+  * try not to call memcpy with length 0 in hash calculations
+  * re-add apt breaks/replaces apt-utils (<< 1.3~exp2~) (Closes: #836220)
+  * support long keyid and fingerprint in gpgv's GOODSIG
+
+ -- Julian Andres Klode <jak@debian.org>  Fri, 02 Sep 2016 20:26:36 +0200
+
+apt (1.3~rc3) unstable; urgency=medium
+
+  [ Julian Andres Klode ]
+  * Ignore SIGINT and SIGQUIT for Pre-Install hooks
+    This basically fixes Bug #832593, as long as your /bin/sh
+    is not dash, as dash is evil.
+  * prepare-release: Use equivs and gdebi-core for travis deps
+  * install-progress: Call the real ::fork() in our fork() method
+  * Packaging cleanup:
+    - debian: Install etc/apt if present (e.g., on Ubuntu)
+    - tests/control: Handle the gpg1/gpg2 mess a bit better
+    - debian: Make better use of the tree installed by CMake
+    - debian: Switch to debhelper 10
+    - debian: Add more lintian overrides
+    - debian: Drop outdated stuff
+    - debian: Run wrap-and-sort
+    - Add new symbols to symbols file
+  * Build system fixes, including:
+   - CMake: Translations: Don't rebuild .mo for line number changes
+   - CMake: Translations: Pass --previous to msgmerge.
+     Thanks to Guillem Jover for the suggestion.
+   - CMake: Do not add po/ if USE_NLS is OFF
+   - CMake: Install config and logging directories
+   - CMake: Translations: Build byproduct before output
+   - CMake: Add Large File Support (Closes: #834767)
+  * Several portability fixes (full test suite passes on FreeBSD), including:
+   - CMake: Discover docbook stylesheet in other locations
+   - Add missing includes and external definitions
+   - Use C locale instead of C.UTF-8 for protocol strings
+   - Make directory paths configurable
+   - Lower-case uname -r output in kernel autoremove helper
+   - Make root group configurable via ROOT_GROUP
+  * Accept --autoremove as alias for --auto-remove
+  * apt-inst: debfile: Pass comp. Name to ExtractTar, not Binary
+  * changelog: Respect Dir setting for local changelog getting
+  * init: Add Dir::Bin::planners default entry
+  * Switch documentation from httpredir.d.o to deb.d.o
+
+  [ Zhou Mo ]
+  * zh_CN.po: update simplified Chinese translation
+
+  [ David Kalnischkies ]
+  * do dpkg --configure before --remove/--purge --pending (Closes: 835094)
+  * prevent C++ locale number formatting in text APIs (try 3) (LP: 1611010)
+  * do fail on weakhash/loop earlier in acquire (Closes: 835195)
+  * do not restore selections for already purged packages
+  * apt-key: warn instead of fail on unreadable keyrings
+  * show apt-key warnings in apt update (Closes: 834973)
+  * treat .ddeb files like .deb, especially for dpkg (LP: #1616909)
+  * randomize acquire order for same type index files
+  * don't loop on pinning pkgs from absolute debs by regex (Closes: 835818)
+
+ -- Julian Andres Klode <jak@debian.org>  Tue, 30 Aug 2016 22:20:28 +0200
+
+apt (1.3~rc2) unstable; urgency=medium
+
+  [ Julian Andres Klode ]
+  * debian/NEWS: Get rid of 1.3~pre3+cmake1 entry.
+    Thanks to Axel Beckert for reporting
+  * CMake: Use COPYONLY instead of @ONLY
+  * fileutl: empty file support: Avoid fstat() on -1 fd and check result
+  * Change anonscm.d.o links to /git/apt/apt.git and https
+
+  [ David Kalnischkies ]
+  * don't perform int<float in progress bar drawing
+  * ensure a good clock() value for usage and tests
+  * drop incorrect const attribute from DirectoryExists (LP: 1473674)
+  * http(s): allow empty values for header fields (Closes: 834048)
+  * don't sent Range requests if we know its not accepted
+  * don't try pipelining if server closes connections (Closes: #832113)
+  * log with the failed item description, not with next try
+  * retry without same redirection mirror on 404 errors
+  * support getting only-uncompressed files via by-hash
+  * support compression and by-hash for .diff/Index files (Closes: #824926)
+  * default to Dir=/ in dpkg/status file finding magic
+  * add the gpg-classic variant to the gpgv/gnupg or-group
+  * allow spaces in fingerprints for 'apt-key del'
+  * add --with-source option and Packages/Sources support
+  * don't count each Type as an individual deb822-sources stanza
+  * methods: read config in most to least specific order (Closes: 834642)
+
+ -- Julian Andres Klode <jak@debian.org>  Wed, 17 Aug 2016 23:31:07 +0200
+
+apt (1.3~rc1) unstable; urgency=medium
+
+  * Summary: CMake branch merged, socks5h (and tor) support, and fancy
+    installation ordering changes.
+
+  [ Julian Andres Klode ]
+  * Handle interrupt when running Pre-Install hooks (Closes: #832593)
+  * CMake: po: Add mirror method
+  * CMake: Translations: Add support for shell scripts
+  * debian: make autopkgtest run with CMake build dir
+  * CMake: Bump minimum required version to 3.4.0
+  * CMake: Check for ptsname_r() again (Closes: #833674)
+  * CMake: Rewrite existing Documentation support and add doxygen
+  * apt-private: Do not include apti18n.h in headers
+  * Get rid of the old buildsystem
+  * Fix some indentation issues in README.md
+
+  [ David Kalnischkies ]
+  * pass --force-remove-essential to dpkg only if needed
+  * use dpkg --unpack --recursive to avoid long cmdlines
+  * save and restore selection states before/after calling dpkg
+  * select remove/purge packages early on for dpkg
+  * call dpkg with --no-triggers by default (Closes: #626599)
+  * don't purge directly, but remove and do purge at the end
+  * ensure all configures are reported to hook scripts
+  * ensure all removes are reported to hook scripts
+  * support all socks-proxy known to curl in https method
+  * suggest transport-packages based on established namescheme
+  * fail on unsupported http/https proxy settings (Closes: #623443)
+  * detect redirection loops in acquire instead of workers
+  * use the same redirection handling for http and https
+  * implement generic config fallback for methods
+  * implement socks5h proxy support for http method (Closes: 744934)
+  * allow methods to be disabled and redirected via config
+  * allow user@host (aka: no password) in URI parsing
+  * try to avoid removal of crossgraded packages
+  * simulate all package manager actions explicitly
+  * disable explicit configuration of all packages at the end
+  * block direct connections to .onion domains (RFC7687)
+  * http: auto-configure for local Tor proxy if called as 'tor'
+
+ -- Julian Andres Klode <jak@debian.org>  Thu, 11 Aug 2016 14:10:22 +0200
+
+apt (1.3~pre3+cmake2) experimental; urgency=medium
+
+  * Build-depend on pkg-config
+
+ -- Julian Andres Klode <jak@debian.org>  Sat, 06 Aug 2016 23:18:37 +0200
+
+apt (1.3~pre3+cmake1) experimental; urgency=medium
+
+  [ Julian Andres Klode ]
+  * configure.ac: Re-enable pthread support for thread-local _error
+  * CMake: Add basic CMake build system
+  * CMake: Add support for building and installing .mo files
+  * CMake: Add initial support for documentation building
+  * CMake: Switch integration tests and travis over
+  * CMake: debian: Switch packaging over to CMake and dh 9
+
+  [ Jason Travis ]
+  * doc: update path to periodic options script
+
+ -- Julian Andres Klode <jak@debian.org>  Sat, 06 Aug 2016 22:37:30 +0200
+
 apt (1.3~pre3) unstable; urgency=medium
 
   [ Julian Andres Klode ]
